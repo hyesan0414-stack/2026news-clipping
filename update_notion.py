@@ -1,6 +1,8 @@
+# update_notion.py
 import os
 import re
 import time
+import html
 from datetime import date
 from dateutil import parser as dtparser
 
@@ -10,8 +12,8 @@ import feedparser
 # -----------------------
 # Notion 설정 (Secrets로만 받음)
 # -----------------------
-NOTION_TOKEN = os.environ["NOTION_TOKEN"]
-DATABASE_ID = os.environ["DATABASE_ID"].replace("-", "")
+NOTION_TOKEN = os.environ["NOTION_TOKEN"].strip()
+DATABASE_ID = os.environ["DATABASE_ID"].strip().replace("-", "")
 
 NOTION_VERSION = "2022-06-28"
 NOTION_API = "https://api.notion.com/v1"
@@ -40,21 +42,44 @@ NEWS_SOURCES = {
 
 # -----------------------
 # 키워드(카테고리 자동 분류) + 발전비정규직 + 공공갈등
-# B안: (주제 1개 이상) AND (경남 포함)
+# 전국 버전: (주제 1개 이상)이면 저장
 # -----------------------
 KEYWORDS = {
-    "기후": ["기후","탄소","온실가스","탄소중립","기후위기","기후재난","폭염","홍수","미세먼지","환경","생태","오염","배출권","탈탄소","기후정의"],
-    "에너지": ["에너지","전력","전기요금","발전소","석탄","LNG","원전","태양광","풍력","재생에너지","수소","송전망","계통","전력망","해상풍력","ESS","에너지전환","정의로운 전환"],
-    "노동": ["노동","노조","파업","임금","교섭","해고","비정규직","하청","용역","산재","중대재해","안전","고용","일자리","근로","직접고용","정규직","발전비정규직","발전하청","발전하청노동자","발전소 비정규직"],
-    "공공": ["공공","공기업","공공기관","지자체","시청","군청","도청","행정","정책","예산","조례","위탁","민영화","공공서비스","공무원","공공성","공공부문"],
-    "공공갈등": ["갈등","공공갈등","사회적 갈등","민원","반발","대립","충돌","분쟁","집단민원","협의체","주민설명회","공청회","숙의","중재","조정","협상","주민수용성","수용성","주민동의","주민투표","NIMBY","님비","LULU","기피시설","이해관계자","이해당사자","거버넌스","상생"],
-    "경남": ["경남","경상남도","창원","진주","통영","거제","사천","김해","양산","밀양","함안","창녕","고성","남해","하동","산청","함양","거창","합천","의령"],
+    "기후": [
+        "기후","탄소","온실가스","탄소중립","기후위기","기후재난","폭염","홍수","미세먼지",
+        "환경","생태","오염","배출권","탈탄소","기후정의"
+    ],
+    "에너지": [
+        "에너지","전력","전기요금","발전소","석탄","LNG","원전","태양광","풍력","재생에너지",
+        "수소","송전망","계통","전력망","해상풍력","ESS","에너지전환","정의로운 전환"
+    ],
+    "노동": [
+        "노동","노조","파업","임금","교섭","해고","비정규직","하청","용역","산재",
+        "중대재해","안전","고용","일자리","근로","직접고용","정규직",
+        "발전비정규직","발전하청","발전하청노동자","발전소 비정규직"
+    ],
+    "공공": [
+        "공공","공기업","공공기관","지자체","시청","군청","도청","행정","정책","예산","조례",
+        "위탁","민영화","공공서비스","공무원","공공성","공공부문"
+    ],
+    "공공갈등": [
+        "갈등","공공갈등","사회적 갈등","민원","반발","대립","충돌","분쟁","집단민원",
+        "협의체","주민설명회","공청회","숙의","중재","조정","협상",
+        "주민수용성","수용성","주민동의","주민투표",
+        "NIMBY","님비","LULU","기피시설",
+        "이해관계자","이해당사자","거버넌스","상생"
+    ],
 }
 TOPIC_CATS = {"기후","에너지","노동","공공","공공갈등"}
 
+# -----------------------
+# 유틸
+# -----------------------
 def clean_html(text: str) -> str:
+    """HTML 태그 제거 + HTML 엔티티(&nbsp; 등) 정리"""
     if not text:
         return ""
+    text = html.unescape(text)
     text = re.sub(r"<[^>]+>", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
@@ -70,12 +95,16 @@ def categorize(title: str, summary: str = ""):
     return cats
 
 def should_keep(title: str, summary: str = ""):
+    """전국 버전: 주제 태그 1개 이상이면 저장"""
     cats = categorize(title, summary)
     has_topic = any(c in TOPIC_CATS for c in cats)
-    has_gyeongnam = ("경남" in cats)
-    return (has_topic and has_gyeongnam), cats
+    return has_topic, cats
 
+# -----------------------
+# Notion API
+# -----------------------
 def notion_query_by_dupkey(dupkey: str) -> bool:
+    """중복키(링크)가 이미 있으면 True"""
     url = f"{NOTION_API}/databases/{DATABASE_ID}/query"
     payload = {
         "filter": {"property": "중복키", "rich_text": {"equals": dupkey}},
@@ -112,6 +141,9 @@ def parse_google_rss_date(entry) -> str | None:
     except Exception:
         return None
 
+# -----------------------
+# 실행
+# -----------------------
 def main():
     inserted = 0
     checked = 0
@@ -138,9 +170,6 @@ def main():
 
             article_date = parse_google_rss_date(e)
 
-            if "경남" not in cats:
-                cats.append("경남")
-
             notion_create_page(title, link, media, article_date, summary, cats)
             inserted += 1
             time.sleep(0.2)
@@ -149,4 +178,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
